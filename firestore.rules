@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function incoming() { 
+      return request.resource.data; 
+    }
+    
+    function existing() { 
+      return resource.data; 
+    }
+
+    function isSafeMap(mapObj) {
+      return mapObj is map;
+    }
+
+    function isValidUserProgress(data) {
+      return data.keys().hasAll(['updatedAt']) &&
+             data.updatedAt == request.time &&
+             (data.keys().hasAny(['completedTopics']) ? isSafeMap(data.completedTopics) : true) &&
+             (data.keys().hasAny(['scoreByTopic']) ? isSafeMap(data.scoreByTopic) : true);
+    }
+    
+    match /userProgress/{userId} {
+      // Must be owner
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      
+      allow create: if isSignedIn() && 
+                       request.auth.uid == userId && 
+                       isValidId(userId) &&
+                       isValidUserProgress(incoming());
+
+      allow update: if isSignedIn() && 
+                       request.auth.uid == userId && 
+                       isValidId(userId) &&
+                       isValidUserProgress(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['completedTopics', 'scoreByTopic', 'updatedAt']);
+    }
+  }
+}

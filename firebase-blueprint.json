@@ -1,0 +1,32 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "User Progress",
+      "description": "Progress of a user in the cybersecurity lab",
+      "type": "object",
+      "properties": {
+        "completedTopics": {
+          "type": "object",
+          "description": "Map of topic ID to boolean or score"
+        },
+        "scoreByTopic": {
+          "type": "object",
+          "description": "Map of topic ID to highest score"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp of last update"
+        }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "userProgress/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProgress"
+      },
+      "description": "Stores user progress tracked by their auth UID"
+    }
+  }
+}
