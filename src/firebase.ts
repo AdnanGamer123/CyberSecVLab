@@ -27,23 +27,24 @@ export async function logout() {
   }
 }
 
-export async function saveProgress(userId: string, completedTopics: Record<string, boolean>, scoreByTopic: Record<string, number>) {
+export async function saveProgress(userId: string, completedTopics: Record<string, boolean>, scoreByTopic: Record<string, number>, failedQuestions?: Record<string, number[]>) {
   try {
     const progressRef = doc(db, 'userProgress', userId);
     const snap = await getDoc(progressRef);
     
+    const dataToSave: any = {
+      completedTopics,
+      scoreByTopic,
+      updatedAt: serverTimestamp()
+    };
+    if (failedQuestions) {
+      dataToSave.failedQuestions = failedQuestions;
+    }
+
     if (snap.exists()) {
-      await updateDoc(progressRef, {
-        completedTopics,
-        scoreByTopic,
-        updatedAt: serverTimestamp()
-      });
+      await updateDoc(progressRef, dataToSave);
     } else {
-      await setDoc(progressRef, {
-        completedTopics,
-        scoreByTopic,
-        updatedAt: serverTimestamp()
-      });
+      await setDoc(progressRef, dataToSave);
     }
   } catch (err: any) {
     console.error("Firestore Error Saving Progress:", JSON.stringify({

@@ -4,6 +4,8 @@ export interface Question {
   correctOptionIndex: number;
 }
 
+export type Level = 'beginner' | 'mid' | 'pro' | 'top';
+
 export interface Topic {
   id: string;
   title: string;

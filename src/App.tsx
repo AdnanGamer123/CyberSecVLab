@@ -4,12 +4,19 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { topics, Topic, Question } from './data/topics';
+import { topics, Topic, Question, Level } from './data/topics';
 import { AIChat } from './components/AIChat';
-import { Shield, ChevronRight, CheckCircle, XCircle, ArrowRight, ArrowLeft, RotateCcw, LogIn, LogOut } from 'lucide-react';
+import { Shield, ChevronRight, CheckCircle, XCircle, ArrowRight, ArrowLeft, RotateCcw, LogIn, LogOut, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, loginWithGoogle, logout, loadProgress, saveProgress } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
+
+const LEVELS: Record<Level, { label: string, colorClass: string, bgClass: string, borderClass: string }> = {
+  beginner: { label: 'المبتدئ', colorClass: 'text-emerald-400', bgClass: 'bg-emerald-500/10', borderClass: 'hover:border-emerald-500/50 hover:shadow-[0_0_15px_rgba(16,185,129,0.1)]' },
+  mid: { label: 'المتوسط', colorClass: 'text-blue-400', bgClass: 'bg-blue-500/10', borderClass: 'hover:border-blue-500/50 hover:shadow-[0_0_15px_rgba(59,130,246,0.1)]' },
+  pro: { label: 'المحترف', colorClass: 'text-amber-400', bgClass: 'bg-amber-500/10', borderClass: 'hover:border-amber-500/50 hover:shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+  top: { label: 'الخبير', colorClass: 'text-rose-400', bgClass: 'bg-rose-500/10', borderClass: 'hover:border-rose-500/50 hover:shadow-[0_0_15px_rgba(244,63,94,0.1)]' }
+};
 
 export default function App() {
   const [currentTopic, setCurrentTopic] = useState<Topic | null>(null);
@@ -18,11 +25,22 @@ export default function App() {
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [score, setScore] = useState(0);
   const [quizFinished, setQuizFinished] = useState(false);
+  const [globalLevel, setGlobalLevel] = useState<Level>('beginner');
   
+  const currentTopicQuestions = currentTopic?.id === 'review-quiz' 
+    ? (currentTopic.questions || [])
+    : currentTopic ? (currentTopic.questions || []).slice(0, 
+        globalLevel === 'beginner' ? 4 :
+        globalLevel === 'mid' ? 6 :
+        globalLevel === 'pro' ? 8 :
+        10
+      ) : [];
+      
   // User & Progress State
   const [user, setUser] = useState<User | null>(null);
   const [completedTopics, setCompletedTopics] = useState<Record<string, boolean>>({});
   const [scoreByTopic, setScoreByTopic] = useState<Record<string, number>>({});
+  const [failedQuestions, setFailedQuestions] = useState<Record<string, number[]>>({});
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
   useEffect(() => {
@@ -33,13 +51,16 @@ export default function App() {
         if (progress) {
           setCompletedTopics(progress.completedTopics || {});
           setScoreByTopic(progress.scoreByTopic || {});
+          setFailedQuestions(progress.failedQuestions || {});
         } else {
           setCompletedTopics({});
           setScoreByTopic({});
+          setFailedQuestions({});
         }
       } else {
         setCompletedTopics({});
         setScoreByTopic({});
+        setFailedQuestions({});
       }
       setIsLoadingAuth(false);
     });
@@ -51,7 +72,7 @@ export default function App() {
       await loginWithGoogle();
     } catch (e) {
       console.error(e);
-      alert('حدث خطأ أثناء تسجيل الدخول');
+      alert('حدث خطأ أثناء تسجيل الدخول. يمكنك استخدام التطبيق، ولكن لن يتم حفظ تقدمك.');
     }
   };
 
@@ -76,44 +97,117 @@ export default function App() {
     setQuizFinished(false);
   };
 
+  const startReviewQuiz = () => {
+    const reviewQuestions: any[] = [];
+    Object.keys(failedQuestions).forEach(topicId => {
+      const topic = topics.find(t => t.id === topicId);
+      if (topic) {
+        failedQuestions[topicId].forEach(qIndex => {
+          if (topic.questions[qIndex]) {
+            reviewQuestions.push({
+              ...topic.questions[qIndex],
+              originalTopicId: topicId,
+              originalQIndex: qIndex
+            });
+          }
+        });
+      }
+    });
+
+    if (reviewQuestions.length === 0) return;
+
+    const reviewTopic: Topic = {
+      id: 'review-quiz',
+      title: 'اختبار مراجعة الأخطاء',
+      description: 'قم بمراجعة الأسئلة التي تعثرت بها سابقاً',
+      content: 'هذا الاختبار مخصص لمراجعة الأخطاء التي قمت بها في الاختبارات السابقة. أجب بشكل صحيح لتصحيح أخطائك ومسحها من سجلك.',
+      questions: reviewQuestions.sort(() => Math.random() - 0.5).slice(0, 15) // pick up to 15 random failed questions
+    };
+
+    setCurrentTopic(reviewTopic);
+    setViewMode('quiz');
+    setCurrentQuestionIndex(0);
+    setSelectedOption(null);
+    setScore(0);
+    setQuizFinished(false);
+  };
+
   const handleOptionSelect = (index: number) => {
     if (selectedOption !== null) return;
     setSelectedOption(index);
-    if (currentTopic && index === currentTopic.questions[currentQuestionIndex].correctOptionIndex) {
+    if (!currentTopic || currentTopicQuestions.length === 0) return;
+
+    const isCorrect = index === currentTopicQuestions[currentQuestionIndex].correctOptionIndex;
+
+    if (isCorrect) {
       setScore(s => s + 1);
+
+      // If review quiz, remove from failedQuestions if answered correctly
+      if (currentTopic.id === 'review-quiz') {
+        const eq = currentTopicQuestions[currentQuestionIndex] as any;
+        if (eq.originalTopicId && eq.originalQIndex !== undefined) {
+          setFailedQuestions(prev => {
+            const newFailed = { ...prev };
+            if (newFailed[eq.originalTopicId]) {
+              newFailed[eq.originalTopicId] = newFailed[eq.originalTopicId].filter(idx => idx !== eq.originalQIndex);
+              if (newFailed[eq.originalTopicId].length === 0) {
+                delete newFailed[eq.originalTopicId];
+              }
+            }
+            return newFailed;
+          });
+        }
+      }
+    } else {
+      // Answered wrong: Add to failedQuestions
+      if (currentTopic.id !== 'review-quiz') {
+        setFailedQuestions(prev => {
+          const newFailed = { ...prev };
+          if (!newFailed[currentTopic.id]) {
+            newFailed[currentTopic.id] = [];
+          }
+          if (!newFailed[currentTopic.id].includes(currentQuestionIndex)) {
+            newFailed[currentTopic.id].push(currentQuestionIndex);
+          }
+          return newFailed;
+        });
+      }
     }
   };
 
   const handleNextQuestion = async () => {
-    if (!currentTopic) return;
+    if (!currentTopic || currentTopicQuestions.length === 0) return;
     
     // Check if moving to next question or ending quiz
-    if (currentQuestionIndex < currentTopic.questions.length - 1) {
+    if (currentQuestionIndex < currentTopicQuestions.length - 1) {
       setCurrentQuestionIndex(i => i + 1);
       setSelectedOption(null);
     } else {
       setQuizFinished(true);
       
-      const isCorrect = selectedOption === currentTopic.questions[currentQuestionIndex].correctOptionIndex;
+      const isCorrect = selectedOption === currentTopicQuestions[currentQuestionIndex].correctOptionIndex;
       const finalScore = score + (isCorrect ? 1 : 0);
       
-      // Keep highest score
-      const currentHighest = scoreByTopic[currentTopic.id] || 0;
-      const newScoreByTopic = { ...scoreByTopic };
-      if (finalScore > currentHighest) {
-        newScoreByTopic[currentTopic.id] = finalScore;
-      }
-      
       const newCompletedTopics = { ...completedTopics };
-      if (finalScore >= 5) {
-        newCompletedTopics[currentTopic.id] = true;
+      const newScoreByTopic = { ...scoreByTopic };
+
+      if (currentTopic.id !== 'review-quiz') {
+        const passThreshold = Math.max(1, Math.floor(currentTopicQuestions.length * 0.5));
+        const topicKey = `${currentTopic.id}_${globalLevel}`;
+        // Keep highest score
+        const currentHighest = scoreByTopic[topicKey] || 0;
+        if (finalScore > currentHighest) {
+          newScoreByTopic[topicKey] = finalScore;
+        }
+        if (finalScore >= passThreshold) {
+          newCompletedTopics[topicKey] = true;
+        }
+        setScoreByTopic(newScoreByTopic);
+        setCompletedTopics(newCompletedTopics);
       }
-      
-      setScoreByTopic(newScoreByTopic);
-      setCompletedTopics(newCompletedTopics);
 
       if (user) {
-        saveProgress(user.uid, newCompletedTopics, newScoreByTopic);
+        saveProgress(user.uid, newCompletedTopics, newScoreByTopic, failedQuestions);
       }
     }
   };
@@ -125,6 +219,8 @@ export default function App() {
       </div>
     );
   }
+
+  const failedCount = Object.values(failedQuestions).flat().length;
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
@@ -189,38 +285,70 @@ export default function App() {
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.2 }}
             >
-              <div className="mb-10 text-center sm:text-right">
-                <h2 className="text-3xl sm:text-4xl font-black text-white mb-4 tracking-tight">
-                  الأساسيات في متناول يدك.
-                </h2>
-                <p className="text-slate-400 max-w-2xl leading-relaxed text-lg">
-                  اختر موضوعاً للبدء. اقرأ الشرح المعرفي لكل موضوع ثم اختبر معلوماتك في سلسلة من الأسئلة. تجاوز 5 أسئلة لاجتياز الموضوع.
-                </p>
+              <div className="mb-10 text-center sm:text-right flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
+                <div>
+                  <h2 className="text-3xl sm:text-4xl font-black text-white mb-4 tracking-tight">
+                    الأساسيات في متناول يدك.
+                  </h2>
+                  <p className="text-slate-400 max-w-2xl leading-relaxed text-lg">
+                    اختر موضوعاً للبدء. اكتسب المعرفة وارتقِ في مستويات الأمن السيبراني.
+                  </p>
+                </div>
+                
+                {failedCount > 0 && (
+                  <button 
+                    onClick={startReviewQuiz} 
+                    className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all mx-auto sm:mx-0 shadow-[0_0_15px_rgba(239,68,68,0.1)] hover:shadow-[0_0_20px_rgba(239,68,68,0.2)]"
+                  >
+                    <AlertTriangle size={20} /> مسابقة مراجعة الأخطاء ({failedCount})
+                  </button>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {topics.map((topic, index) => {
-                  const isCompleted = completedTopics[topic.id];
-                  return (
-                    <motion.button
-                      key={topic.id}
-                      onClick={() => { setCurrentTopic(topic); setViewMode('content'); }}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="group flex flex-col items-start p-5 bg-slate-900 border border-slate-800 hover:border-emerald-500/50 rounded-2xl transition-all shadow-sm hover:shadow-emerald-500/10 text-right text-base cursor-pointer"
+              <div className="space-y-12">
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 mb-10 border-b border-slate-800 pb-8">
+                  <span className="text-slate-400 font-bold ml-2">مستوى التطبيق:</span>
+                  {(['beginner', 'mid', 'pro', 'top'] as Level[]).map(l => (
+                    <button
+                      key={l}
+                      onClick={() => setGlobalLevel(l)}
+                      className={`px-5 py-2.5 rounded-xl font-bold transition-all border ${
+                        globalLevel === l 
+                          ? `${LEVELS[l].bgClass} ${LEVELS[l].colorClass} border-current` 
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
                     >
-                      <div className="flex items-center justify-between w-full mb-3">
-                        <span className="font-mono text-xs text-emerald-500 bg-emerald-500/10 px-2 py-1 rounded-md label">MOD_{String(index + 1).padStart(2, '0')}</span>
-                        {isCompleted && <CheckCircle size={18} className="text-emerald-500" />}
-                      </div>
-                      <h3 className="font-bold text-white text-lg mb-2">{topic.title}</h3>
-                      <p className="text-sm text-slate-400 mb-4 flex-1">{topic.description}</p>
-                      <div className="flex items-center text-emerald-400 text-sm mt-auto group-hover:translate-x-1 transition-transform">
-                        <ChevronRight size={16} /> <span>المادة العلمية واختبار المعرفة</span>
-                      </div>
-                    </motion.button>
-                  );
-                })}
+                      {LEVELS[l].label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {topics.map((topic, index) => {
+                    const isCompleted = completedTopics[`${topic.id}_${globalLevel}`];
+                    const levelDef = LEVELS[globalLevel];
+                    
+                    return (
+                      <motion.button
+                        key={topic.id}
+                        onClick={() => { setCurrentTopic(topic); setViewMode('content'); }}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className={`group flex flex-col items-start p-5 bg-slate-900 border border-slate-800 rounded-2xl transition-all text-right text-base cursor-pointer ${levelDef.borderClass}`}
+                      >
+                        <div className="flex items-center justify-between w-full mb-3">
+                          <span className={`font-mono text-xs ${levelDef.colorClass} ${levelDef.bgClass} px-2 py-1 rounded-md`}>MOD_{topic.id.substring(0,3).toUpperCase()}</span>
+                          {isCompleted && <CheckCircle size={18} className="text-emerald-500" />}
+                        </div>
+                        <h3 className="font-bold text-white text-lg mb-2">{topic.title}</h3>
+                        <p className="text-sm text-slate-400 mb-4 flex-1 line-clamp-2">{topic.description}</p>
+                        <div className={`flex items-center ${levelDef.colorClass} text-sm mt-auto group-hover:-translate-x-1 transition-transform`}>
+                          <ChevronRight size={16} /> <span>تعلم واختبر معلوماتك</span>
+                        </div>
+                      </motion.button>
+                    );
+                  })}
+                </div>
               </div>
             </motion.div>
           ) : viewMode === 'content' ? (
@@ -235,6 +363,9 @@ export default function App() {
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-10 shadow-xl">
                 <div className="flex justify-between items-start mb-6 border-b border-slate-800 pb-4">
                   <h2 className="text-3xl font-bold text-white">{currentTopic.title}</h2>
+                  <span className={`px-3 py-1 text-sm rounded-lg ${LEVELS[globalLevel].bgClass} ${LEVELS[globalLevel].colorClass}`}>
+                    {LEVELS[globalLevel].label}
+                  </span>
                 </div>
                 
                 <div className="prose prose-invert prose-emerald max-w-none text-slate-300 leading-loose text-lg whitespace-pre-wrap mb-10">
@@ -265,25 +396,25 @@ export default function App() {
                   {/* Progress */}
                   <div className="mb-8">
                     <div className="flex justify-between text-sm text-slate-400 mb-2 font-mono">
-                      <span>السؤال {currentQuestionIndex + 1} من {currentTopic.questions.length}</span>
+                      <span>السؤال {currentQuestionIndex + 1} من {currentTopicQuestions.length}</span>
                       <span>النقاط: {score}</span>
                     </div>
                     <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-emerald-500 transition-all duration-300"
-                        style={{ width: `${((currentQuestionIndex) / currentTopic.questions.length) * 100}%` }}
+                        style={{ width: `${((currentQuestionIndex) / currentTopicQuestions.length) * 100}%` }}
                       ></div>
                     </div>
                   </div>
 
                   <h3 className="text-xl sm:text-2xl font-bold text-white mb-8 leading-relaxed">
-                    {currentTopic.questions[currentQuestionIndex].text}
+                    {currentTopicQuestions[currentQuestionIndex].text}
                   </h3>
 
                   <div className="space-y-3">
-                    {currentTopic.questions[currentQuestionIndex].options.map((option, idx) => {
+                    {currentTopicQuestions[currentQuestionIndex].options.map((option, idx) => {
                       const isSelected = selectedOption === idx;
-                      const isCorrect = currentTopic.questions[currentQuestionIndex].correctOptionIndex === idx;
+                      const isCorrect = currentTopicQuestions[currentQuestionIndex].correctOptionIndex === idx;
                       const showFeedback = selectedOption !== null;
 
                       let btnClass = "w-full text-right p-4 rounded-xl border flex items-center justify-between transition-all ";
@@ -321,47 +452,49 @@ export default function App() {
                       animate={{ opacity: 1, y: 0 }}
                       className="mt-8 flex justify-between items-center"
                     >
-                      <div className={`font-bold ${selectedOption === currentTopic.questions[currentQuestionIndex].correctOptionIndex ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {selectedOption === currentTopic.questions[currentQuestionIndex].correctOptionIndex ? 'إجابة صحيحة!' : 'إجابة غير صحيحة.'}
+                      <div className={`font-bold ${selectedOption === currentTopicQuestions[currentQuestionIndex].correctOptionIndex ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {selectedOption === currentTopicQuestions[currentQuestionIndex].correctOptionIndex ? 'إجابة صحيحة!' : 'إجابة غير صحيحة.'}
                       </div>
                       <button 
                         onClick={handleNextQuestion}
                         className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
                       >
-                        {currentQuestionIndex < currentTopic.questions.length - 1 ? 'السؤال التالي' : 'إنهاء الاختبار'} <ArrowLeft size={18} />
+                        {currentQuestionIndex < currentTopicQuestions.length - 1 ? 'السؤال التالي' : 'إنهاء الاختبار'} <ArrowLeft size={18} />
                       </button>
                     </motion.div>
                   )}
                 </div>
               ) : (
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-10 shadow-xl text-center">
-                  <div className="inline-flex items-center justify-center w-24 h-24 rounded-full mb-6 bg-emerald-500/20 text-emerald-400">
-                    <Shield size={48} />
+                  <div className={`inline-flex items-center justify-center w-24 h-24 rounded-full mb-6 ${currentTopic.id === 'review-quiz' ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                    {currentTopic.id === 'review-quiz' ? <AlertTriangle size={48} /> : <Shield size={48} />}
                   </div>
                   <h2 className="text-3xl font-black text-white mb-4 tracking-tight">اكتمل الاختبار!</h2>
                   <p className="text-slate-400 text-lg mb-6">موضوع: {currentTopic.title}</p>
                   
                   <div className="text-5xl font-mono font-bold text-white mb-8 border-y border-slate-800 py-8">
-                    {score} <span className="text-2xl text-slate-500">/ {currentTopic.questions.length}</span>
+                    {score} <span className="text-2xl text-slate-500">/ {currentTopicQuestions.length}</span>
                   </div>
 
-                  {score >= 5 ? (
+                  {score >= (currentTopicQuestions.length / 2) ? (
                     <div className="text-emerald-400 font-bold mb-8 flex items-center justify-center gap-2">
-                       تهانينا! لقد اجتزت هذا الموضوع بنجاح.
+                       تهانينا! لقد حققت نتيجة جيدة.
                     </div>
                   ) : (
                     <div className="text-red-400 font-bold mb-8 flex items-center justify-center gap-2">
-                       يمكنك تحقيق نتيجة أفضل. حاول مراجعة المادة مرة أخرى.
+                       يمكنك تحقيق نتيجة أفضل. ركز أكثر في المرة القادمة.
                     </div>
                   )}
 
                   <div className="flex justify-center gap-4">
-                    <button 
-                      onClick={() => setViewMode('content')}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2"
-                    >
-                      <RotateCcw size={18} /> العودة للمادة العلمية
-                    </button>
+                    {currentTopic.id !== 'review-quiz' && (
+                      <button 
+                        onClick={() => setViewMode('content')}
+                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2"
+                      >
+                        <RotateCcw size={18} /> العودة للمادة العلمية
+                      </button>
+                    )}
                     <button 
                       onClick={resetToHome}
                       className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold transition-all"
@@ -376,6 +509,7 @@ export default function App() {
         </AnimatePresence>
       </main>
 
+      {/* AIChat is still present; we'll remove it if you prefer or keep it */}
       <AIChat currentTopicContent={currentTopic?.content} />
     </div>
   );

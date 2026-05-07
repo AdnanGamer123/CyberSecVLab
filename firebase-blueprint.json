@@ -13,6 +13,10 @@
           "type": "object",
           "description": "Map of topic ID to highest score"
         },
+        "failedQuestions": {
+          "type": "object",
+          "description": "Map of topic ID to array of failed question indices"
+        },
         "updatedAt": {
           "type": "string",
           "description": "Timestamp of last update"

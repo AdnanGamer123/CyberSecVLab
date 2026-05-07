@@ -32,7 +32,8 @@ service cloud.firestore {
       return data.keys().hasAll(['updatedAt']) &&
              data.updatedAt == request.time &&
              (data.keys().hasAny(['completedTopics']) ? isSafeMap(data.completedTopics) : true) &&
-             (data.keys().hasAny(['scoreByTopic']) ? isSafeMap(data.scoreByTopic) : true);
+             (data.keys().hasAny(['scoreByTopic']) ? isSafeMap(data.scoreByTopic) : true) &&
+             (data.keys().hasAny(['failedQuestions']) ? isSafeMap(data.failedQuestions) : true);
     }
     
     match /userProgress/{userId} {
@@ -48,7 +49,7 @@ service cloud.firestore {
                        request.auth.uid == userId && 
                        isValidId(userId) &&
                        isValidUserProgress(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['completedTopics', 'scoreByTopic', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['completedTopics', 'scoreByTopic', 'failedQuestions', 'updatedAt']);
     }
   }
 }
